@@ -39,6 +39,7 @@ enum : int {
     IDC_OUTW,
     IDC_OUTH,
     IDC_THRESHOLD,
+    IDC_INSET,
     IDC_INVERT,
     IDC_NAME,
     IDC_EXTRACT,
@@ -51,6 +52,9 @@ enum : int {
 };
 
 constexpr UINT_PTR TIMER_REPROCESS = 1;
+constexpr UINT_PTR TIMER_INSET_PREVIEW = 2;
+constexpr UINT INSET_PREVIEW_MS = 1500;  // how long the trimmed margins stay visible after the slider moves
+constexpr int MAX_INSET = 64;
 constexpr int EFFECT_COUNT = (int)Effect::Count;
 
 const wchar_t* const HINT_TEXT =
@@ -159,6 +163,7 @@ struct App {
     HWND hdrGrid = nullptr, btnApplyGrid = nullptr, btnFitGrid = nullptr, btnMarkAll = nullptr, btnClearMarks = nullptr;
     NumField fRows, fCols, fCellW, fCellH, fOffX, fOffY;
     HWND hdrExtract = nullptr, lblOutHint = nullptr, lblThreshold = nullptr, trkThreshold = nullptr, lblThresholdVal = nullptr;
+    HWND lblInset = nullptr, trkInset = nullptr, lblInsetVal = nullptr;
     NumField fOutW, fOutH;
     HWND chkInvert = nullptr, lblName = nullptr, editName = nullptr, btnExtract = nullptr;
     HWND hdrList = nullptr, list = nullptr, btnDelete = nullptr, btnClearList = nullptr, btnSaveC = nullptr, btnSaveBmp = nullptr;
@@ -179,6 +184,8 @@ struct App {
     int imgBmpW = 0, imgBmpH = 0;
     HDC overlayDC = nullptr;
     HBITMAP overlayBmp = nullptr;
+    HDC cutDC = nullptr;        // 1x1 colour used to shade the trimmed cell margins
+    HBITMAP cutBmp = nullptr;
 
     // view
     double zoom = 1.0;
@@ -198,6 +205,10 @@ struct App {
 
     // results
     std::vector<Pictogram> pictos;
+
+    // cell inset: pixels cut off every side of a cell before extraction
+    int inset = 0;
+    bool insetPreview = false;
 };
 
 App g;
@@ -349,6 +360,20 @@ void updateGridFields() {
 void updateStrengthLabel() {
     SetWindowTextW(g.lblStrengthVal,
                    (std::to_wstring(g.strength) + L"   (" + strengthMeaning(g.effect) + L")").c_str());
+}
+
+void updateInsetLabel() {
+    SetWindowTextW(g.lblInsetVal, (std::to_wstring(g.inset) + L" px").c_str());
+}
+
+// The part of cell (r,c) that is extracted, in image pixels: the cell minus the inset on every side.
+// The inset is limited per axis so at least one pixel always remains.
+RECT innerCell(int r, int c) {
+    const int x0 = g.grid.xs[c], x1 = g.grid.xs[c + 1];
+    const int y0 = g.grid.ys[r], y1 = g.grid.ys[r + 1];
+    const int ix = std::min(g.inset, (x1 - x0 - 1) / 2);
+    const int iy = std::min(g.inset, (y1 - y0 - 1) / 2);
+    return RECT{ x0 + ix, y0 + iy, x1 - ix, y1 - iy };
 }
 
 void updateThresholdLabel() {
@@ -533,8 +558,9 @@ void extract() {
     for (int r = 0; r < g.grid.rows(); ++r) {
         for (int c = 0; c < g.grid.cols(); ++c) {
             if (!g.grid.mark(r, c)) continue;
+            const RECT in = innerCell(r, c);
             g.pictos.push_back(extractCell(g.grey, g.display.w, g.display.h,
-                                           g.grid.xs[c], g.grid.ys[r], g.grid.xs[c + 1], g.grid.ys[r + 1],
+                                           in.left, in.top, in.right, in.bottom,
                                            outW, outH, threshold, invert));
             ++added;
         }
@@ -704,18 +730,36 @@ void paintCanvas(HDC hdc, const RECT& rc) {
             const auto& ys = g.grid.ys;
             const int cols = g.grid.cols(), rows = g.grid.rows();
 
-            // Marked cells: translucent green fill + extraction order number.
+            // Marked cells: translucent green fill over the extracted (inset) area + extraction order number.
+            // Unmarked cells, right after the inset slider moved: the margins that will be cut off are shaded.
             BLENDFUNCTION bf = { AC_SRC_OVER, 0, 110, 0 };
+            BLENDFUNCTION cutBf = { AC_SRC_OVER, 0, 150, 0 };
             HGDIOBJ oldFont = SelectObject(mem, g.smallFont);
             SetBkMode(mem, TRANSPARENT);
+            const bool showCut = g.insetPreview && g.inset > 0;
+            auto shade = [&](int l, int t, int rgt, int b) {
+                if (rgt > l && b > t) AlphaBlend(mem, l, t, rgt - l, b - t, g.cutDC, 0, 0, 1, 1, cutBf);
+            };
             int order = 0;
             for (int r = 0; r < rows; ++r) {
                 for (int c = 0; c < cols; ++c) {
-                    if (!g.grid.mark(r, c)) continue;
-                    const int x0 = toScrX(xs[c]), x1 = toScrX(xs[c + 1]);
-                    const int y0 = toScrY(ys[r]), y1 = toScrY(ys[r + 1]);
-                    const int idx = order++;
-                    if (x1 < 0 || y1 < 0 || x0 > w || y0 > h || x1 <= x0 || y1 <= y0) continue;
+                    const bool marked = g.grid.mark(r, c) != 0;
+                    if (!marked && !showCut) continue;
+                    const int idx = marked ? order++ : -1;
+                    const int cx0 = toScrX(xs[c]), cx1 = toScrX(xs[c + 1]);
+                    const int cy0 = toScrY(ys[r]), cy1 = toScrY(ys[r + 1]);
+                    if (cx1 < 0 || cy1 < 0 || cx0 > w || cy0 > h) continue;
+                    const RECT in = innerCell(r, c);
+                    const int x0 = toScrX(in.left), x1 = toScrX(in.right);
+                    const int y0 = toScrY(in.top), y1 = toScrY(in.bottom);
+                    if (!marked) {
+                        shade(cx0, cy0, cx1, y0);   // top
+                        shade(cx0, y1, cx1, cy1);   // bottom
+                        shade(cx0, y0, x0, y1);     // left
+                        shade(x1, y0, cx1, y1);     // right
+                        continue;
+                    }
+                    if (x1 <= x0 || y1 <= y0) continue;
                     AlphaBlend(mem, x0, y0, x1 - x0, y1 - y0, g.overlayDC, 0, 0, 1, 1, bf);
                     if (x1 - x0 >= S(18) && y1 - y0 >= S(14)) {
                         RECT tr = { x0 + S(2), y0 + 1, x1 - 1, y1 - 1 };
@@ -1019,8 +1063,9 @@ void createFonts() {
     g.smallFont = CreateFontIndirectW(&small);
 }
 
-void createOverlay() {
-    g.overlayDC = CreateCompatibleDC(nullptr);
+// A memory DC holding a single pixel of the given colour (0x00RRGGBB), stretched by AlphaBlend as a tint.
+void createTint(uint32_t rgb, HDC& dc, HBITMAP& bmp) {
+    dc = CreateCompatibleDC(nullptr);
     BITMAPINFO bi = {};
     bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
     bi.bmiHeader.biWidth = 1;
@@ -1029,9 +1074,14 @@ void createOverlay() {
     bi.bmiHeader.biBitCount = 32;
     bi.bmiHeader.biCompression = BI_RGB;
     void* bits = nullptr;
-    g.overlayBmp = CreateDIBSection(nullptr, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
-    if (bits) *(uint32_t*)bits = 0x0020D060;  // BGRA -> green
-    SelectObject(g.overlayDC, g.overlayBmp);
+    bmp = CreateDIBSection(nullptr, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (bits) *(uint32_t*)bits = rgb;
+    SelectObject(dc, bmp);
+}
+
+void createOverlay() {
+    createTint(0x0020D060, g.overlayDC, g.overlayBmp);  // green: marked cells
+    createTint(0x00E03050, g.cutDC, g.cutBmp);          // red: margins cut off by the inset
 }
 
 void createControls() {
@@ -1074,6 +1124,11 @@ void createControls() {
     g.fOutW = makeNumField(L"Output W", IDC_OUTW, 0, 4096, 0);
     g.fOutH = makeNumField(L"Output H", IDC_OUTH, 0, 4096, 0);
     g.lblOutHint = makeLabel(L"0 = keep the cell size in pixels");
+    g.lblInset = makeLabel(L"Cell inset");
+    g.trkInset = makeTrackbar(IDC_INSET, 0, MAX_INSET, 0);
+    SendMessageW(g.trkInset, TBM_SETPAGESIZE, 0, 4);
+    g.lblInsetVal = makeLabel(L"");
+    updateInsetLabel();
     g.lblThreshold = makeLabel(L"Threshold");
     g.trkThreshold = makeTrackbar(IDC_THRESHOLD, 1, 255, 128);
     g.lblThresholdVal = makeLabel(L"128");
@@ -1169,6 +1224,9 @@ void layout() {
     placeNumField(g.fOutW, px, py, half, fieldH);
     placeNumField(g.fOutH, px2, py, half, fieldH);         py += fieldH + S(2);
     moveCtl(g.lblOutHint, px, py, pw, S(18));              py += S(20);
+    moveCtl(g.lblInset, px, py, S(62), fieldH);
+    moveCtl(g.trkInset, px + S(62), py, pw - S(62) - S(44), fieldH);
+    moveCtl(g.lblInsetVal, px + pw - S(40), py, S(40), fieldH); py += fieldH + S(4);
     moveCtl(g.lblThreshold, px, py, S(62), fieldH);
     moveCtl(g.trkThreshold, px + S(62), py, pw - S(62) - S(36), fieldH);
     moveCtl(g.lblThresholdVal, px + pw - S(32), py, S(32), fieldH); py += fieldH + S(4);
@@ -1270,7 +1328,7 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_GETMINMAXINFO: {
         MINMAXINFO* mmi = (MINMAXINFO*)lp;
         mmi->ptMinTrackSize.x = g.minWidth;
-        mmi->ptMinTrackSize.y = S(760);
+        mmi->ptMinTrackSize.y = S(790);
         return 0;
     }
 
@@ -1303,12 +1361,27 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             updateThresholdLabel();
             return 0;
         }
+        if ((HWND)lp == g.trkInset) {
+            g.inset = (int)SendMessageW(g.trkInset, TBM_GETPOS, 0, 0);
+            updateInsetLabel();
+            // Show the cut-off margins on the unmarked cells for a moment; every move restarts the timer.
+            g.insetPreview = true;
+            SetTimer(hwnd, TIMER_INSET_PREVIEW, INSET_PREVIEW_MS, nullptr);
+            invalidateCanvas();
+            return 0;
+        }
         break;
 
     case WM_TIMER:
         if (wp == TIMER_REPROCESS) {
             KillTimer(hwnd, TIMER_REPROCESS);
             reprocess();
+            return 0;
+        }
+        if (wp == TIMER_INSET_PREVIEW) {
+            KillTimer(hwnd, TIMER_INSET_PREVIEW);
+            g.insetPreview = false;
+            invalidateCanvas();
             return 0;
         }
         break;
@@ -1419,6 +1492,8 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int nCmdShow) {
     DeleteDC(g.imgDC);
     DeleteDC(g.overlayDC);
     DeleteObject(g.overlayBmp);
+    DeleteDC(g.cutDC);
+    DeleteObject(g.cutBmp);
     DeleteObject(g.font);
     DeleteObject(g.boldFont);
     DeleteObject(g.smallFont);

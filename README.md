@@ -27,9 +27,13 @@ The result is `build\PictogramParser.exe`. It is statically linked, so it needs 
    - Right-drag, Ctrl+drag or the arrow keys (Shift = 10 px) move the whole grid.
    - Click a cell, or drag across cells, to mark or unmark pictograms. The yellow numbers show the extraction order.
    - Mouse wheel zooms. Middle-drag, or a drag outside the grid, pans. `F` fits the view.
-4. **Extraction**: Output W/H sets the size of the pictogram (0 = keep the cell size). Pixels darker than
-   **Threshold** become ink. **Invert** swaps ink and background. **Name** is the prefix: pictograms are called
-   `<name><number>`, numbered from 0. **EXTRACT** (Ctrl+E) adds every marked cell to the list.
+4. **Extraction**: Output W/H sets the size of the pictogram (0 = keep the cell size).
+   **Cell inset** cuts that many pixels off every side of each cell before extracting, which removes a grid
+   drawn into the sheet: snap the app's grid onto the drawn lines, then raise the inset until the lines are
+   outside the green area. While you move the slider, the margins that will be cut off are shaded red on the
+   unmarked cells, and the green fill of marked cells always shows exactly the area that will be extracted.
+   Pixels darker than **Threshold** become ink. **Invert** swaps ink and background. **Name** is the prefix:
+   pictograms are called `<name><number>`, numbered from 0. **EXTRACT** (Ctrl+E) adds every marked cell to the list.
 5. **Save as C array...** writes one header file. **Save as Bitmap...** writes one 1-bit `.bmp` per pictogram
    into the folder you choose.
 
