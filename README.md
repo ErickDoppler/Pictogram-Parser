@@ -3,6 +3,8 @@
 A Windows desktop app (C++17, Win32 + GDI+) that cuts a sheet of pictograms into small black-and-white
 images, which you can save as C arrays or as `.bmp` files.
 
+![Pictogram Parser: a 10 x 10 grid snapped onto a sheet of sci-fi icons, 90 cells marked, Black & White preprocessing with a 3 px cell inset, and the extracted pictograms in the list on the right](docs/screenshot.png)
+
 ## Download
 
 Grab `PictogramParser-<version>-win64.zip` from the [Releases](https://github.com/ErickDoppler/Pictogram-Parser/releases) page, unzip it and
