@@ -253,3 +253,44 @@ Pictogram extractCell(const std::vector<uint8_t>& grey, int imgW, int imgH,
     }
     return p;
 }
+
+Pictogram extractCellColor(const Image& img, int x0, int y0, int x1, int y1, int outW, int outH) {
+    Pictogram p;
+    p.color = true;
+    const int cw = std::max(1, x1 - x0);
+    const int ch = std::max(1, y1 - y0);
+    p.w = outW > 0 ? outW : cw;
+    p.h = outH > 0 ? outH : ch;
+    p.rgb.assign((size_t)p.w * p.h, 0xFFFFFFFFu);
+
+    for (int oy = 0; oy < p.h; ++oy) {
+        int sy0 = y0 + (int)((long long)oy * ch / p.h);
+        int sy1 = y0 + (int)((long long)(oy + 1) * ch / p.h);
+        if (sy1 <= sy0) sy1 = sy0 + 1;
+        for (int ox = 0; ox < p.w; ++ox) {
+            int sx0 = x0 + (int)((long long)ox * cw / p.w);
+            int sx1 = x0 + (int)((long long)(ox + 1) * cw / p.w);
+            if (sx1 <= sx0) sx1 = sx0 + 1;
+
+            long long r = 0, g = 0, b = 0, cnt = 0;
+            for (int sy = sy0; sy < sy1; ++sy) {
+                for (int sx = sx0; sx < sx1; ++sx) {
+                    if (sx >= 0 && sy >= 0 && sx < img.w && sy < img.h) {
+                        const uint32_t px = img.px[(size_t)sy * img.w + sx];
+                        r += chR(px);
+                        g += chG(px);
+                        b += chB(px);
+                    } else {
+                        r += 255;
+                        g += 255;
+                        b += 255;
+                    }
+                    ++cnt;
+                }
+            }
+            cnt = std::max(1LL, cnt);
+            p.rgb[(size_t)oy * p.w + ox] = rgb((int)(r / cnt), (int)(g / cnt), (int)(b / cnt));
+        }
+    }
+    return p;
+}

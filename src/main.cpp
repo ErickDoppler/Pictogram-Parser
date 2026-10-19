@@ -40,7 +40,9 @@ enum : int {
     IDC_OUTH,
     IDC_THRESHOLD,
     IDC_INSET,
-    IDC_INVERT,
+    IDC_MODE_BW,        // output mode radio buttons, in this order
+    IDC_MODE_BW_INVERTED,
+    IDC_MODE_COLOR,
     IDC_NAME,
     IDC_EXTRACT,
     IDC_LIST,
@@ -139,6 +141,9 @@ struct NumField {
 
 enum class Drag { None, Paint, Lines, MoveGrid, Pan };
 
+// How EXTRACT turns a cell into a pictogram. Order matches the IDC_MODE_* radio buttons.
+enum class ExtractMode { BlackWhite, BlackWhiteInverted, Color };
+
 // ---------------------------------------------------------------------------------------------
 // Application state
 // ---------------------------------------------------------------------------------------------
@@ -165,7 +170,8 @@ struct App {
     HWND hdrExtract = nullptr, lblOutHint = nullptr, lblThreshold = nullptr, trkThreshold = nullptr, lblThresholdVal = nullptr;
     HWND lblInset = nullptr, trkInset = nullptr, lblInsetVal = nullptr;
     NumField fOutW, fOutH;
-    HWND chkInvert = nullptr, lblName = nullptr, editName = nullptr, btnExtract = nullptr;
+    HWND rdoMode[3] = {};
+    HWND lblName = nullptr, editName = nullptr, btnExtract = nullptr;
     HWND hdrList = nullptr, list = nullptr, btnDelete = nullptr, btnClearList = nullptr, btnSaveC = nullptr, btnSaveBmp = nullptr;
 
     // image
@@ -362,6 +368,20 @@ void updateStrengthLabel() {
                    (std::to_wstring(g.strength) + L"   (" + strengthMeaning(g.effect) + L")").c_str());
 }
 
+ExtractMode currentMode() {
+    for (int i = 0; i < 3; ++i)
+        if (SendMessageW(g.rdoMode[i], BM_GETCHECK, 0, 0) == BST_CHECKED) return (ExtractMode)i;
+    return ExtractMode::BlackWhite;
+}
+
+// Threshold only means something for the black-and-white modes.
+void updateModeControls() {
+    const BOOL bw = currentMode() != ExtractMode::Color;
+    EnableWindow(g.lblThreshold, bw);
+    EnableWindow(g.trkThreshold, bw);
+    EnableWindow(g.lblThresholdVal, bw);
+}
+
 void updateInsetLabel() {
     SetWindowTextW(g.lblInsetVal, (std::to_wstring(g.inset) + L" px").c_str());
 }
@@ -552,16 +572,19 @@ void extract() {
     const int outW = std::clamp(getNum(g.fOutW, 0), 0, 4096);
     const int outH = std::clamp(getNum(g.fOutH, 0), 0, 4096);
     const int threshold = (int)SendMessageW(g.trkThreshold, TBM_GETPOS, 0, 0);
-    const bool invert = SendMessageW(g.chkInvert, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    const ExtractMode mode = currentMode();
 
     int added = 0;
     for (int r = 0; r < g.grid.rows(); ++r) {
         for (int c = 0; c < g.grid.cols(); ++c) {
             if (!g.grid.mark(r, c)) continue;
             const RECT in = innerCell(r, c);
-            g.pictos.push_back(extractCell(g.grey, g.display.w, g.display.h,
-                                           in.left, in.top, in.right, in.bottom,
-                                           outW, outH, threshold, invert));
+            if (mode == ExtractMode::Color)
+                g.pictos.push_back(extractCellColor(g.display, in.left, in.top, in.right, in.bottom, outW, outH));
+            else
+                g.pictos.push_back(extractCell(g.grey, g.display.w, g.display.h,
+                                               in.left, in.top, in.right, in.bottom,
+                                               outW, outH, threshold, mode == ExtractMode::BlackWhiteInverted));
             ++added;
         }
     }
@@ -1132,9 +1155,12 @@ void createControls() {
     g.lblThreshold = makeLabel(L"Threshold");
     g.trkThreshold = makeTrackbar(IDC_THRESHOLD, 1, 255, 128);
     g.lblThresholdVal = makeLabel(L"128");
-    g.chkInvert = makeCtl(L"BUTTON", L"Invert (light pixels become ink)", BS_AUTOCHECKBOX | WS_TABSTOP, IDC_INVERT);
+    static const wchar_t* const modeNames[3] = { L"Black and White", L"Inverted Black and White", L"Full Color" };
+    for (int i = 0; i < 3; ++i)
+        g.rdoMode[i] = makeCtl(L"BUTTON", modeNames[i], BS_AUTORADIOBUTTON | (i == 0 ? WS_GROUP | WS_TABSTOP : 0), IDC_MODE_BW + i);
+    SendMessageW(g.rdoMode[0], BM_SETCHECK, BST_CHECKED, 0);
     g.lblName = makeLabel(L"Name");
-    g.editName = makeCtl(L"EDIT", L"icon_", ES_AUTOHSCROLL | WS_TABSTOP, IDC_NAME, WS_EX_CLIENTEDGE);
+    g.editName = makeCtl(L"EDIT", L"icon_", ES_AUTOHSCROLL | WS_TABSTOP | WS_GROUP, IDC_NAME, WS_EX_CLIENTEDGE);
     g.btnExtract = makeCtl(L"BUTTON", L"EXTRACT", BS_DEFPUSHBUTTON | WS_TABSTOP, IDC_EXTRACT, 0, g.boldFont);
 
     g.hdrList = makeLabel(L"PICTOGRAMS  (0)", 0, g.boldFont);
@@ -1230,7 +1256,11 @@ void layout() {
     moveCtl(g.lblThreshold, px, py, S(62), fieldH);
     moveCtl(g.trkThreshold, px + S(62), py, pw - S(62) - S(36), fieldH);
     moveCtl(g.lblThresholdVal, px + pw - S(32), py, S(32), fieldH); py += fieldH + S(4);
-    moveCtl(g.chkInvert, px, py, pw, S(20));               py += S(24);
+    for (HWND rdo : g.rdoMode) {
+        moveCtl(rdo, px, py, pw, S(20));
+        py += S(21);
+    }
+    py += S(4);
     moveCtl(g.lblName, px, py, S(56), fieldH);
     moveCtl(g.editName, px + S(56), py, pw - S(56), fieldH); py += fieldH + S(6);
     moveCtl(g.btnExtract, px, py, pw, S(36));              py += S(36) + S(10);
@@ -1286,7 +1316,8 @@ void drawListItem(const DRAWITEMSTRUCT* dis) {
         const int ty = boxRc.top + (box - th) / 2;
 
         std::vector<uint32_t> px((size_t)p.w * p.h);
-        for (size_t i = 0; i < px.size(); ++i) px[i] = p.bits[i] ? 0x00000000u : 0x00FFFFFFu;
+        for (size_t i = 0; i < px.size(); ++i)
+            px[i] = p.color ? (p.rgb[i] & 0x00FFFFFFu) : (p.bits[i] ? 0x00000000u : 0x00FFFFFFu);
         BITMAPINFO bi = {};
         bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
         bi.bmiHeader.biWidth = p.w;
@@ -1304,7 +1335,7 @@ void drawListItem(const DRAWITEMSTRUCT* dis) {
     SetTextColor(dc, GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : COLOR_WINDOWTEXT));
     HGDIOBJ oldFont = SelectObject(dc, g.font);
     RECT tr = { boxRc.right + S(8), rc.top + S(4), rc.right - S(4), rc.bottom - S(2) };
-    const std::wstring text = toWide(pictogramName(idx)) + L"\n" + std::to_wstring(p.w) + L" x " + std::to_wstring(p.h) + L" px";
+    const std::wstring text = toWide(pictogramName(idx)) + L"\n" + std::to_wstring(p.w) + L" x " + std::to_wstring(p.h) + L" px, " + (p.color ? L"color" : L"1-bit");
     DrawTextW(dc, text.c_str(), -1, &tr, DT_LEFT | DT_TOP | DT_NOPREFIX | DT_END_ELLIPSIS);
     SelectObject(dc, oldFont);
 
@@ -1328,7 +1359,7 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_GETMINMAXINFO: {
         MINMAXINFO* mmi = (MINMAXINFO*)lp;
         mmi->ptMinTrackSize.x = g.minWidth;
-        mmi->ptMinTrackSize.y = S(790);
+        mmi->ptMinTrackSize.y = S(840);
         return 0;
     }
 
@@ -1395,6 +1426,10 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 updateStrengthLabel();
                 reprocess();
             }
+            return 0;
+        }
+        if (id >= IDC_MODE_BW && id <= IDC_MODE_COLOR) {
+            if (code == BN_CLICKED) updateModeControls();
             return 0;
         }
         if (id == IDC_NAME && code == EN_CHANGE) {

@@ -1,7 +1,7 @@
 # Pictogram Parser
 
-A Windows desktop app (C++17, Win32 + GDI+) that cuts a sheet of pictograms into small black-and-white
-images, which you can save as C arrays or as `.bmp` files.
+A Windows desktop app (C++17, Win32 + GDI+) that cuts a sheet of pictograms into small images, black and
+white or in full colour, which you can save as C arrays or as `.bmp` files.
 
 ![Pictogram Parser: a 10 x 10 grid snapped onto a sheet of sci-fi icons, 90 cells marked, Black & White preprocessing with a 3 px cell inset, and the extracted pictograms in the list on the right](docs/screenshot.png)
 
@@ -34,16 +34,30 @@ The result is `build\PictogramParser.exe`. It is statically linked, so it needs 
    drawn into the sheet: snap the app's grid onto the drawn lines, then raise the inset until the lines are
    outside the green area. While you move the slider, the margins that will be cut off are shaded red on the
    unmarked cells, and the green fill of marked cells always shows exactly the area that will be extracted.
-   Pixels darker than **Threshold** become ink. **Invert** swaps ink and background. **Name** is the prefix:
-   pictograms are called `<name><number>`, numbered from 0. **EXTRACT** (Ctrl+E) adds every marked cell to the list.
-5. **Save as C array...** writes one header file. **Save as Bitmap...** writes one 1-bit `.bmp` per pictogram
-   into the folder you choose.
+   The output mode decides what a cell becomes:
+   - **Black and White**: pixels darker than **Threshold** become ink (1-bit).
+   - **Inverted Black and White**: the same, but light pixels become ink. Use it for light pictograms on a dark
+     background.
+   - **Full Color**: the cell exactly as the preview shows it, with the current effect applied. Threshold is
+     ignored.
+
+   **Name** is the prefix: pictograms are called `<name><number>`, numbered from 0. **EXTRACT** (Ctrl+E) adds
+   every marked cell to the list.
+5. **Save as C array...** writes one header file. **Save as Bitmap...** writes one `.bmp` per pictogram into the
+   folder you choose: 1-bit for black-and-white pictograms, 24-bit for colour ones. One list can mix both.
 
 ## C array format
 
-1 bit per pixel, row by row, MSB = leftmost pixel. Every row is padded to whole bytes, so a row takes
-`(width + 7) / 8` bytes. A bit of 1 is a black (ink) pixel. Each array comes with `_WIDTH` / `_HEIGHT` defines
-and an ASCII preview of every row. A lookup table `<file>_table[]` lists all pictograms.
+Each pictogram has a format:
+
+- **MONO1** (black and white): a `uint8_t` array, 1 bit per pixel, row by row, MSB = leftmost pixel. Every row is
+  padded to whole bytes, so a row takes `(width + 7) / 8` bytes. A bit of 1 is a black (ink) pixel. Each row
+  comes with an ASCII preview.
+- **RGB565** (full colour): a `uint16_t` array, one pixel per value, row by row. Bits 15-11 are red, 10-5
+  green, 4-0 blue.
+
+Every array has `_WIDTH`, `_HEIGHT` and `_FORMAT` defines. A lookup table `<file>_table[]` lists all
+pictograms with their name, size, format and a pointer to the data.
 
 ## License
 
