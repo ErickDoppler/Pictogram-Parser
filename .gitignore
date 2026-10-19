@@ -1,0 +1,27 @@
+# --- CMake build output ---
+build/
+out/
+cmake-build-*/
+CMakeUserPresets.json
+compile_commands.json
+.cache/
+
+# --- Binaries ---
+*.exe
+*.obj
+*.pdb
+*.ilk
+*.lib
+*.dll
+*.zip
+
+# --- Logs ---
+*.log
+
+# --- IDE / OS ---
+.idea/
+.vs/
+.vscode/
+.claude/
+.DS_Store
+Thumbs.db

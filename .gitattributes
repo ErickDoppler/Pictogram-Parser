@@ -1,0 +1,12 @@
+# Text files are normalised to LF in the repository...
+* text=auto eol=lf
+
+# ...except the Windows scripts, which are checked out with CRLF everywhere:
+# cmd.exe can misparse a batch file that has bare LF line endings.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Assets and binaries are never touched.
+*.ico binary
+*.png binary
